@@ -1,6 +1,7 @@
 package com.payment.wallet.controller;
 
 import com.payment.wallet.constants.ApiRoutes;
+import com.payment.wallet.config.TransferAdmission;
 import com.payment.wallet.dto.ApiResponse;
 import com.payment.wallet.exception.WalletException;
 import com.payment.wallet.models.TransferStatus;
@@ -26,9 +27,11 @@ import java.net.URI;
 @RequestMapping({ApiRoutes.TRANSFERS, ApiRoutes.TRANSFER_ALIAS})
 public class TransferController {
     private final TransferService transfers;
+    private final TransferAdmission admission;
 
-    public TransferController(TransferService transfers) {
+    public TransferController(TransferService transfers, TransferAdmission admission) {
         this.transfers = transfers;
+        this.admission = admission;
     }
 
     @PostMapping
@@ -36,8 +39,8 @@ public class TransferController {
             @RequestHeader(value = "Authorization", required = false) String authorization,
             @RequestHeader(value = "Idempotency-Key", required = false) @Pattern(regexp = "[\\x21-\\x7E]{1,128}") String key,
             @Valid @RequestBody TransferRequest request) {
-        TransferResult result = transfers.create(AuthenticatedUser.fromAuthorization(authorization),
-                resolvedIdempotencyKey(key, request), request);
+        TransferResult result = admission.execute(() -> transfers.create(AuthenticatedUser.fromAuthorization(authorization),
+                resolvedIdempotencyKey(key, request), request));
         if (result.replayed()) {
             return ResponseEntity.ok().header("Idempotent-Replay", "true").body(response(result.transfer()));
         }

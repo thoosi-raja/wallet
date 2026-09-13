@@ -78,6 +78,8 @@ The reversal feature is not part of the current R2 API. A later implementation n
 
 ## Free-instance resource budget
 
-The Docker JVM uses at most 50% of container memory for the Java heap and caps its code cache at 64 MB, leaving room for class metadata, thread stacks and native allocations. Compose limits the app to 512 MB and one CPU for repeatable local tests. This does not promise the same CPU throughput as shared free hosting. The health-check startup grace is five minutes to allow slow initialization; once healthy, checks run every 15 seconds.
+The Docker JVM uses at most 35% of container memory for the Java heap and caps its code cache at 48 MB, leaving room for class metadata, thread stacks and native allocations. Compose limits the app to 512 MB and one CPU for repeatable local tests. This does not promise the same CPU throughput as shared free hosting. The health-check startup grace is five minutes; once healthy, checks run every 15 seconds.
 
 A separate local test with a hard 0.1-CPU quota showed clean 503 responses under severe contention, without a process restart. A Render burst did restart the process, so the underlying platform restart reason must not be assumed solely from that local test. Limits protect accounting correctness; only live measurements establish whether a particular free-instance burst completes successfully.
+
+The free deployment admits eight transfer requests at a time, using a fair in-process queue with a 120-second bound. The Hikari pool has six connections, so a spike cannot create hundreds of connection waiters. JSON stdout logging is asynchronous with a 2,048-event queue so log-drain speed does not occupy request workers. This is an availability control for one app instance; PostgreSQL constraints, idempotency and locks remain the correctness controls across instances.

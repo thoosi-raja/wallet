@@ -47,7 +47,7 @@ export DB_PASSWORD=your-local-database-password
 ./mvnw spring-boot:run
 ```
 
-Flyway creates the schema on first start; Hibernate validates it without modifying it. The Docker build compiles and runs unit tests on Java 21. The runtime uses the unprivileged `walletuser:walletgroup`, a read-only filesystem with writable `/tmp`, and an HTTP health check. Compose caps the app at 512 MB and one CPU; the JVM reserves at most half of container memory for its heap and 64 MB for code cache.
+Flyway creates the schema on first start; Hibernate validates it without modifying it. The Docker build compiles and runs unit tests on Java 21. The runtime uses the unprivileged `walletuser:walletgroup`, a read-only filesystem with writable `/tmp`, and an HTTP health check. Compose caps the app at 512 MB and one CPU; the JVM reserves at most 35% of container memory for its heap and 48 MB for code cache.
 
 ## API
 
@@ -128,6 +128,8 @@ Liquibase is also a valid choice, especially if the team needs structured change
 Standard output is JSON encoded by `LogstashEncoder`. Events include `wallet_provisioned`, `transfer_initiated`, `transfer_created`, `wallet_debited`, `wallet_credited`, `transfer_success`, `transfer_declined_insufficient_funds`, and `idempotent_replay_hit`. Every creation/debit/credit/completion event is emitted only after commit, with the transfer ID and request correlation ID. Replays emit no new debit or credit event. Request bodies and idempotency keys are not included in domain event logs. `X-Correlation-ID` is returned and put in MDC; missing or unsafe values are replaced with a UUID, and MDC is cleared in a `finally` block. Accepted supplied IDs contain 1–128 letters, digits, dots, underscores, colons or hyphens.
 
 The public `/logs` endpoint returns the latest 200 selected domain events in the shared JSON envelope. Its bounded buffer omits request bodies, tokens, idempotency keys, hashes and exception details, and resets on restart.
+
+On a small instance, at most eight transfer requests perform database work at once. Additional requests wait fairly for up to 120 seconds, then receive a retryable `503 TRANSFER_QUEUE_FULL` response. This caps database connections and pending lock work while preserving idempotent retry behavior. JSON stdout logging is asynchronous so slow log drains do not delay committed transfer responses.
 
 `/metrics` and `/actuator/prometheus` export request rate, latency and error-rate inputs through `http_server_requests_seconds` with status/outcome tags and histogram buckets for p99 queries. They also export:
 

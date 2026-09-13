@@ -15,4 +15,4 @@ USER walletuser:walletgroup
 EXPOSE 8080
 HEALTHCHECK --interval=15s --timeout=3s --start-period=300s --retries=3 \
     CMD wget -q -T 2 -O /dev/null "http://127.0.0.1:${PORT:-8080}/actuator/health" || exit 1
-ENTRYPOINT ["java", "-XX:MaxRAMPercentage=50.0", "-XX:ReservedCodeCacheSize=64m", "-jar", "/app/app.jar"]
+ENTRYPOINT ["java", "-XX:MaxRAMPercentage=35.0", "-XX:ReservedCodeCacheSize=48m", "-jar", "/app/app.jar"]

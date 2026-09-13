@@ -7,7 +7,12 @@
             <includeMdc>true</includeMdc>
         </encoder>
     </appender>
-    <root level="INFO">
+    <appender name="ASYNC_JSON_STDOUT" class="ch.qos.logback.classic.AsyncAppender">
+        <queueSize>2048</queueSize>
+        <discardingThreshold>0</discardingThreshold>
         <appender-ref ref="JSON_STDOUT"/>
+    </appender>
+    <root level="INFO">
+        <appender-ref ref="ASYNC_JSON_STDOUT"/>
     </root>
 </configuration>
