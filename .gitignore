@@ -37,3 +37,7 @@ build/
 .env.*
 !.env.example
 *.log
+__pycache__/
+evidence/runs/
+evidence/live-*/
+evidence/local-run/

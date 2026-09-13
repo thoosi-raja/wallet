@@ -1,5 +1,11 @@
 package com.payment.wallet;
 
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
+import com.payment.wallet.service.TransferService;
+import org.slf4j.LoggerFactory;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.payment.wallet.config.CorrelationFilter;
@@ -80,9 +86,9 @@ class WalletConcurrencyIT {
             .connectTimeout(Duration.ofSeconds(5)).build();
 
     @Test
-    void twentyConcurrentProvisioningRequestsCreateOneZeroBalanceWallet() throws Exception {
+    void fiftyConcurrentProvisioningRequestsCreateOneZeroBalanceWallet() throws Exception {
         String user = unique();
-        List<HttpResponse<String>> results = burst(20, i -> post("/api/v1/wallets", Map.of("user_id", user), null));
+        List<HttpResponse<String>> results = burst(50, i -> post("/api/v1/wallets", Map.of("user_id", user), null));
         assertThat(results).allSatisfy(response -> assertThat(response.statusCode()).isEqualTo(200));
         assertThat(results.stream().map(this::body).map(node -> node.path("data").get("id").asText()).distinct()).hasSize(1);
         assertThat(results).allSatisfy(response -> assertThat(body(response).path("data").get("balance_paise").asLong()).isZero());
@@ -90,15 +96,15 @@ class WalletConcurrencyIT {
     }
 
     @Test
-    void fifteenIdenticalConcurrentRequestsDebitExactlyOnceAndReturnTheOriginalBody() throws Exception {
+    void thirtyIdenticalConcurrentRequestsDebitExactlyOnceAndReturnTheOriginalBody() throws Exception {
         String source = wallet(100);
         String destination = wallet(0);
         String key = unique();
         double createdBefore = count("wallet_transfers_successful_total");
         double replaysBefore = count("wallet_transfers_idempotent_replays_total");
-        var results = burst(15, i -> transfer(source, destination, 100, key));
+        var results = burst(30, i -> transfer(source, destination, 100, key));
         assertThat(results.stream().filter(r -> r.statusCode() == 201)).hasSize(1);
-        assertThat(results.stream().filter(r -> r.statusCode() == 200)).hasSize(14);
+        assertThat(results.stream().filter(r -> r.statusCode() == 200)).hasSize(29);
         String original = results.stream().filter(r -> r.statusCode() == 201).findFirst().orElseThrow().body();
         assertThat(results).allSatisfy(r -> assertThat(r.body()).isEqualTo(original));
         assertThat(results.stream().filter(r -> r.statusCode() == 200)).allSatisfy(r ->
@@ -107,7 +113,7 @@ class WalletConcurrencyIT {
         assertThat(balance(destination)).isEqualTo(100);
         assertThat(transferCount(key)).isEqualTo(1);
         assertThat(count("wallet_transfers_successful_total") - createdBefore).isEqualTo(1);
-        assertThat(count("wallet_transfers_idempotent_replays_total") - replaysBefore).isEqualTo(14);
+        assertThat(count("wallet_transfers_idempotent_replays_total") - replaysBefore).isEqualTo(29);
     }
 
     @Test
@@ -125,15 +131,15 @@ class WalletConcurrencyIT {
     }
 
     @Test
-    void fiftyBidirectionalTransfersPreserveBalancesAndCompleteWithoutDeadlock() throws Exception {
+    void twoHundredBidirectionalTransfersPreserveBalancesAndCompleteWithoutDeadlock() throws Exception {
         String a = wallet(10_000);
         String b = wallet(10_000);
-        var results = burst(50, i -> i % 2 == 0 ? transfer(a, b, 100, unique()) : transfer(b, a, 100, unique()));
+        var results = burst(200, i -> i % 2 == 0 ? transfer(a, b, 100, unique()) : transfer(b, a, 100, unique()));
         assertThat(results).allSatisfy(r -> assertThat(r.statusCode()).describedAs(r.body()).isEqualTo(201));
         assertThat(balance(a)).isEqualTo(10_000);
         assertThat(balance(b)).isEqualTo(10_000);
         assertThat(jdbc.queryForObject("SELECT count(*) FROM transfers WHERE source_wallet_id IN (?, ?)",
-                Long.class, a, b)).isEqualTo(50);
+                Long.class, a, b)).isEqualTo(200);
     }
 
     @Test
@@ -365,7 +371,7 @@ class WalletConcurrencyIT {
         assertError(send("GET", "/api/v1/wallets/" + a, null, null, "Bearer stranger"), 403, "FORBIDDEN");
         assertError(send("GET", "/api/v1/wallets/" + unique(), null, null, "Bearer stranger"), 404, "WALLET_NOT_FOUND");
         assertError(send("GET", "/api/v1/unknown", null, null), 404, "HTTP_ERROR");
-        assertError(send("GET", "/wallets/" + a, null, null), 404, "HTTP_ERROR");
+        assertError(send("GET", "/wallets/" + a, null, null), 401, "UNAUTHENTICATED");
         var wrongMethod = send("DELETE", "/api/v1/wallets/" + a, null, null);
         assertError(wrongMethod, 405, "HTTP_ERROR");
         assertThat(wrongMethod.headers().firstValue("Allow")).hasValueSatisfying(
@@ -406,6 +412,72 @@ class WalletConcurrencyIT {
         assertThat(response.body()).doesNotContain("private database detail");
         assertThat(balance(a)).isEqualTo(100);
         assertThat(balance(b)).isZero();
+    }
+
+    @Test
+    void originalAndVersionedRoutesShareWalletsAndIdempotency() throws Exception {
+        String user = unique();
+        var original = post("/wallets", Map.of("user_id", user), null);
+        var versioned = post("/api/v1/wallets", Map.of("user_id", user), null);
+        assertThat(original.statusCode()).isEqualTo(200);
+        assertThat(versioned.body()).isEqualTo(original.body());
+        String a = body(original).path("data").get("id").asText();
+        String b = wallet(0);
+        jdbc.update("UPDATE wallets SET balance_paise = 100 WHERE id = ?", a);
+        String key = unique();
+        Map<String, Object> request = Map.of("from", a, "to", b, "amount_paise", 10, "idempotency_key", key);
+        var created = post("/transfers", request, null, "Bearer " + user);
+        var replay = post("/api/v1/transfers", request, null, "Bearer " + user);
+        assertThat(created.statusCode()).isEqualTo(201);
+        assertThat(replay.statusCode()).isEqualTo(200);
+        assertThat(replay.body()).isEqualTo(created.body());
+        String id = body(created).path("data").get("id").asText();
+        assertThat(send("GET", "/transfers/" + id, null, null, "Bearer " + user).body()).isEqualTo(created.body());
+        assertThat(send("GET", "/wallets/" + a, null, null, "Bearer " + user).statusCode()).isEqualTo(200);
+        assertThat(balance(a)).isEqualTo(90);
+        assertThat(balance(b)).isEqualTo(10);
+    }
+
+    @Test
+    void completionEventsDescribeOnlyCommittedMovements() throws Exception {
+        String a = wallet(100);
+        String b = wallet(0);
+        var events = new java.util.concurrent.CopyOnWriteArrayList<String>();
+        var activeTransactions = new java.util.concurrent.CopyOnWriteArrayList<Boolean>();
+        Logger logger = (Logger) LoggerFactory.getLogger(TransferService.class);
+        var appender = new ListAppender<ILoggingEvent>() {
+            @Override protected void append(ILoggingEvent event) {
+                event.getKeyValuePairs().stream().filter(pair -> pair.key.equals("event")).forEach(pair -> {
+                    events.add(pair.value.toString());
+                    if (!pair.value.equals("transfer_initiated")) {
+                        activeTransactions.add(TransactionSynchronizationManager.isActualTransactionActive());
+                    }
+                });
+            }
+        };
+        appender.start();
+        logger.addAppender(appender);
+        jdbc.execute("ALTER TABLE transfers ADD CONSTRAINT test_log_failure CHECK (amount_paise <> 13)");
+        try {
+            assertThat(transfer(a, b, 13, unique()).statusCode()).isEqualTo(500);
+            assertThat(events).containsExactly("transfer_initiated");
+            events.clear();
+            String key = unique();
+            assertThat(transfer(a, b, 10, key).statusCode()).isEqualTo(201);
+            assertThat(events).containsExactly("transfer_initiated", "transfer_created", "wallet_debited",
+                    "wallet_credited", "transfer_success");
+            events.clear();
+            assertThat(transfer(a, b, 10, key).statusCode()).isEqualTo(200);
+            assertThat(events).containsExactly("transfer_initiated", "idempotent_replay_hit");
+            events.clear();
+            assertThat(transfer(a, b, 1000, unique()).statusCode()).isEqualTo(422);
+            assertThat(events).containsExactly("transfer_initiated", "transfer_created", "transfer_declined_insufficient_funds");
+            assertThat(activeTransactions).isNotEmpty().containsOnly(false);
+        } finally {
+            logger.detachAppender(appender);
+            appender.stop();
+            jdbc.execute("ALTER TABLE transfers DROP CONSTRAINT test_log_failure");
+        }
     }
 
     private void assertError(HttpResponse<String> response, int status, String code) {

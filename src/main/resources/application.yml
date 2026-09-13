@@ -14,13 +14,13 @@ spring:
     hikari:
       maximum-pool-size: 20
       minimum-idle: 5
-      connection-timeout: 5000
+      connection-timeout: 60000
       validation-timeout: 1000
       transaction-isolation: TRANSACTION_READ_COMMITTED
       data-source-properties:
-        options: -c lock_timeout=4000 -c statement_timeout=10000 -c idle_in_transaction_session_timeout=15000
-        connectTimeout: 5
-        socketTimeout: 15
+        options: -c lock_timeout=15000 -c statement_timeout=20000 -c idle_in_transaction_session_timeout=30000
+        connectTimeout: 10
+        socketTimeout: 35
   jpa:
     open-in-view: false
     hibernate:

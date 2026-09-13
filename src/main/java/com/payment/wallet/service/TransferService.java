@@ -74,6 +74,19 @@ public class TransferService {
 
         // Record completion only after commit.
         metrics.record(result);
+        if (!result.replayed()) {
+            TransferResponse transfer = result.transfer();
+            log.atInfo().addKeyValue("event", "transfer_created").addKeyValue("transfer_id", transfer.id())
+                    .addKeyValue("status", transfer.status()).log("Transfer committed");
+            if (transfer.status() == TransferStatus.SUCCESS) {
+                log.atInfo().addKeyValue("event", "wallet_debited").addKeyValue("transfer_id", transfer.id())
+                        .addKeyValue("wallet_id", transfer.sourceWalletId())
+                        .addKeyValue("amount_paise", transfer.amountPaise()).log("Wallet debit committed");
+                log.atInfo().addKeyValue("event", "wallet_credited").addKeyValue("transfer_id", transfer.id())
+                        .addKeyValue("wallet_id", transfer.destinationWalletId())
+                        .addKeyValue("amount_paise", transfer.amountPaise()).log("Wallet credit committed");
+            }
+        }
         String event = result.replayed() ? "idempotent_replay_hit"
                 : result.transfer().status() == TransferStatus.SUCCESS
                 ? "transfer_success" : "transfer_declined_insufficient_funds";
@@ -120,18 +133,12 @@ public class TransferService {
             source.changeBalance(source.getBalancePaise() - request.amountPaise(), now);
             destination.changeBalance(credited, now);
             status = TransferStatus.SUCCESS;
-            log.atInfo().addKeyValue("event", "wallet_debited").addKeyValue("wallet_id", source.getId())
-                    .addKeyValue("amount_paise", request.amountPaise()).log("Wallet debited");
-            log.atInfo().addKeyValue("event", "wallet_credited").addKeyValue("wallet_id", destination.getId())
-                    .addKeyValue("amount_paise", request.amountPaise()).log("Wallet credited");
         }
 
         Transfer transfer = new Transfer(UUID.randomUUID().toString(), key, request.from(), request.to(),
                 request.amountPaise(), hash, status, declineReason, now);
         // Flush here so uniqueness failures are translated to DataIntegrityViolationException.
         transfers.saveAndFlush(transfer);
-        log.atInfo().addKeyValue("event", "transfer_created").addKeyValue("transfer_id", transfer.getId())
-                .addKeyValue("status", transfer.getStatus()).log("Transfer row created");
         return new TransferResult(TransferResponse.from(transfer), false);
     }
 

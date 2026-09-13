@@ -17,7 +17,26 @@ curl -fsS http://localhost:8080/metrics
 ./scripts/burst_test.sh
 ```
 
-The burst script requires Bash, curl, jq and Docker Compose. It creates two fresh test wallets, seeds each with 1,000,000 paise using SQL inside the local PostgreSQL container, and verifies all four requested concurrency scenarios. It leaves those wallets and their 51 transfer records available for inspection. Repeated runs use new users and keys. Use `BASE_URL` for a different service URL backed by the same Compose database; `WALLET_PORT` is also respected.
+The burst script requires Python 3 and curl; local funding and SQL verification additionally use Docker Compose. It creates four fresh wallets, funds each with 1,000,000 paise, and checks 50 simultaneous get-or-create requests, 30 identical transfer retries, conflicting keys, cross-route idempotency, and 200 simultaneous mixed transfers including 50 overdrafts. It verifies exact final balances, 201 transfer rows (151 successful and 50 declined), and exported metrics. No failed transfer is silently retried. Each run saves response bodies, correlation IDs, HTTP status counts and observed p99 latency under `evidence/runs/`.
+
+For the deployed service, use the same runner with the target database credentials in your local environment (not committed). Native `psql` is used if installed; otherwise Docker supplies the PostgreSQL client:
+
+```bash
+BASE_URL=https://wallet-xrdr.onrender.com ./scripts/burst_test.sh --db postgres
+```
+
+Set `PGHOST` to Neon's direct hostname, `PGDATABASE=wallet`, `PGUSER=neondb_owner`, `PGSSLMODE=require`, `PGCHANNELBINDING=require`, and supply the password through `PGPASSWORD` or, for native psql, a local password file. The runner passes credentials through environment variables and does not record them. Use the same database as the deployed app. Remote API URLs are rejected in Compose database mode to prevent funding the wrong database.
+
+If you prefer Neon's SQL editor, no password needs to leave Neon:
+
+```bash
+./scripts/burst_test.sh --base-url https://wallet-xrdr.onrender.com --prepare --output evidence/runs/live
+# Execute the generated seed.sql in Neon; it must report exactly four funded wallets.
+./scripts/burst_test.sh --db manual --resume evidence/runs/live
+```
+
+Manual mode verifies HTTP invariants and generates `verify.sql` for independent row-count checks. Its report explicitly marks database verification as pending. Once a run has started transfers, it cannot be resumed: use new wallets and keys for another attempt. Funding SQL updates only the run's four fresh zero-balance wallets, atomically. Use `--api-prefix ''` to test the original unversioned routes. Warmup allows up to 120 seconds for a sleeping free instance; bursts use a 120-second request deadline.
+
 
 For a local JVM, use Java 21 and an existing PostgreSQL 16 database:
 
@@ -32,7 +51,7 @@ Flyway creates the schema on first start; Hibernate validates it without modifyi
 
 ## API
 
-Business routes are centralized in `constants/ApiRoutes.java` under `/api/v1`. This is a breaking change from the unversioned `/wallets` and `/transfers` paths; callers must use the versioned paths and read resource fields from `data`. `Location` headers also use the versioned paths. Monitoring endpoints remain `/metrics` and `/actuator/*` and retain their standard formats.
+Business routes are centralized in `constants/ApiRoutes.java`. Both `/wallets` and `/transfers` and their `/api/v1` equivalents are supported by the same controllers. They share authentication, response envelopes and idempotency keys. Read resource fields from `data`; `Location` headers use the canonical `/api/v1` paths. Monitoring endpoints remain `/metrics` and `/actuator/*` and retain their standard formats.
 
 All business responses use the reusable `ApiResponse<T>` record:
 
@@ -68,7 +87,7 @@ curl -sS http://localhost:8080/api/v1/wallets \
   -d '{"user_id":"alice"}'
 ```
 
-Wallet response `data` contains `id`, `user_id`, `balance_paise`, `created_at`, and `updated_at`. New wallets always start at zero. Funding is outside this transfer service; the burst script uses SQL exclusively for isolated local test data.
+Wallet response `data` contains `id`, `user_id`, `balance_paise`, `created_at`, and `updated_at`. New wallets always start at zero. Funding is outside this transfer service; the burst script uses SQL exclusively for its isolated test wallets.
 
 Transfer response `data` contains `id`, `idempotency_key`, `source_wallet_id`, `destination_wallet_id`, `amount_paise`, `status`, `decline_reason`, and `created_at`. A newly recorded transfer includes a `Location` header for its read endpoint. `decline_reason` is null for `SUCCESS` and `Insufficient funds` for `DECLINED_INSUFFICIENT_FUNDS`.
 
@@ -96,7 +115,7 @@ Credit arithmetic uses `Math.addExact` before either balance is changed. Debits 
 
 DTOs and service results are immutable Java records. Table entities (`Wallet`, `Transfer`) and their status enum live in the `models` package. JPA entities use the classes and protected no-argument constructors required by JPA; wallet mutation is confined to locked transactions and transfers are marked immutable. The application contains no JVM monitor blocks or process-local balance locks. Multiple service instances coordinate through PostgreSQL. Service write methods own their transactions, so callers should invoke them without holding an outer database transaction or wallet locks.
 
-HikariCP allows 20 connections and waits at most 5 seconds for a connection. PostgreSQL lock timeout is 4 seconds, statement timeout is 10 seconds, transaction timeout is 15 seconds, and open-in-view is disabled. Contention exceeding these bounds produces a retryable failure rather than an unbounded wait. Conservation applies to the transfer engine; any separate funding or administration path must obey the same database locking and accounting rules.
+HikariCP allows 20 connections and waits at most 60 seconds for a connection. PostgreSQL lock timeout is 15 seconds, statement timeout is 20 seconds, transaction timeout is 30 seconds, and open-in-view is disabled. Contention exceeding these bounds produces a retryable failure rather than an unbounded wait. Conservation applies to the transfer engine; any separate funding or administration path must obey the same database locking and accounting rules.
 
 ## Why Flyway rather than Liquibase?
 
@@ -106,7 +125,7 @@ Liquibase is also a valid choice, especially if the team needs structured change
 
 ## Observability
 
-Standard output is JSON encoded by `LogstashEncoder`. Events include `wallet_provisioned`, `transfer_initiated`, `transfer_success`, `transfer_declined_insufficient_funds`, and `idempotent_replay_hit`. Request bodies and idempotency keys are not included in domain event logs. `X-Correlation-ID` is returned and put in MDC; missing or unsafe values are replaced with a UUID, and MDC is cleared in a `finally` block. Accepted supplied IDs contain 1–128 letters, digits, dots, underscores, colons or hyphens.
+Standard output is JSON encoded by `LogstashEncoder`. Events include `wallet_provisioned`, `transfer_initiated`, `transfer_created`, `wallet_debited`, `wallet_credited`, `transfer_success`, `transfer_declined_insufficient_funds`, and `idempotent_replay_hit`. Every creation/debit/credit/completion event is emitted only after commit, with the transfer ID and request correlation ID. Replays emit no new debit or credit event. Request bodies and idempotency keys are not included in domain event logs. `X-Correlation-ID` is returned and put in MDC; missing or unsafe values are replaced with a UUID, and MDC is cleared in a `finally` block. Accepted supplied IDs contain 1–128 letters, digits, dots, underscores, colons or hyphens.
 
 `/metrics` and `/actuator/prometheus` export request rate, latency and error-rate inputs through `http_server_requests_seconds` with status/outcome tags and histogram buckets for p99 queries. They also export:
 
@@ -125,7 +144,14 @@ The service uses the supported `micrometer-registry-prometheus` dependency and S
 ./mvnw verify     # Unit and PostgreSQL 16 Testcontainers integration tests; Docker is required
 ```
 
-Integration tests send concurrent HTTP requests through the actual MVC server. They verify provisioning races, identical replays after exhausting the source, conflicting payloads, 50 simultaneous debits, 50 bidirectional transfers, durable declined replays, forced unique-index races and rollback recovery, integer overflow and maximum-long precision, malformed input, the direct database overdraft constraint, unrelated integrity failures, correlation headers, virtual request threads, metrics, health, and read endpoints. They require real PostgreSQL and fail if Docker is unavailable; no H2 approximation or silent test skipping is used.
+Integration tests send concurrent HTTP requests through the actual MVC server. They verify provisioning races, identical replays after exhausting the source, conflicting payloads, 50 simultaneous debits, 200 bidirectional transfers, durable declined replays, forced unique-index races and rollback recovery, integer overflow and maximum-long precision, malformed input, the direct database overdraft constraint, unrelated integrity failures, correlation headers, virtual request threads, metrics, health, and read endpoints. They require real PostgreSQL and fail if Docker is unavailable; no H2 approximation or silent test skipping is used.
+
+## Deployment and evidence
+
+API: https://wallet-xrdr.onrender.com. Repository: https://github.com/thoosi-raja/wallet.
+Use `/actuator/health/readiness` for the host health check and `/metrics` for Prometheus. The Docker health check follows `PORT` (8080 by default). Live readiness does not establish live concurrency correctness; current evidence and any remaining checks are recorded in [SUBMISSION.md](SUBMISSION.md).
+
+GitHub Actions checks a fresh checkout with Maven/PostgreSQL tests, Docker Compose, and the same burst command. CI stores its test reports, burst responses and container logs as artifacts. The [operations guide](docs/OPERATIONS.md) contains PromQL and the live log capture procedure.
 
 ## Deployment boundary
 

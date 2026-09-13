@@ -23,7 +23,7 @@ import org.springframework.web.bind.annotation.RestController;
 import java.net.URI;
 
 @RestController
-@RequestMapping(ApiRoutes.TRANSFERS)
+@RequestMapping({ApiRoutes.TRANSFERS, ApiRoutes.TRANSFER_ALIAS})
 public class TransferController {
     private final TransferService transfers;
 

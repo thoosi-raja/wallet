@@ -14,5 +14,5 @@ COPY --from=build --chown=walletuser:walletgroup /workspace/target/wallet-servic
 USER walletuser:walletgroup
 EXPOSE 8080
 HEALTHCHECK --interval=15s --timeout=3s --start-period=45s --retries=3 \
-    CMD wget -q -T 2 -O /dev/null http://127.0.0.1:8080/actuator/health || exit 1
+    CMD wget -q -T 2 -O /dev/null "http://127.0.0.1:${PORT:-8080}/actuator/health" || exit 1
 ENTRYPOINT ["java", "-XX:MaxRAMPercentage=75.0", "-jar", "/app/app.jar"]

@@ -14,7 +14,7 @@ public class TransactionConfig {
         // The service owns commit/rollback, including when called from another transaction.
         template.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
         template.setIsolationLevel(TransactionDefinition.ISOLATION_READ_COMMITTED);
-        template.setTimeout(15);
+        template.setTimeout(30);
         return template;
     }
 }
