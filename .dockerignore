@@ -1,0 +1,10 @@
+.git
+.idea
+.vscode
+.codex
+.agents
+target
+.env
+.env.*
+!.env.example
+*.log

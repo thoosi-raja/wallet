@@ -1,0 +1,65 @@
+spring:
+  application:
+    name: wallet-service
+  main:
+    banner-mode: off
+    keep-alive: true
+  threads:
+    virtual:
+      enabled: true
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/wallet}
+    username: ${DB_USERNAME:wallet}
+    password: ${DB_PASSWORD}
+    hikari:
+      maximum-pool-size: 20
+      minimum-idle: 5
+      connection-timeout: 5000
+      validation-timeout: 1000
+      transaction-isolation: TRANSACTION_READ_COMMITTED
+      data-source-properties:
+        options: -c lock_timeout=4000 -c statement_timeout=10000 -c idle_in_transaction_session_timeout=15000
+        connectTimeout: 5
+        socketTimeout: 15
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        jdbc:
+          time_zone: UTC
+  flyway:
+    enabled: true
+  jackson:
+    property-naming-strategy: SNAKE_CASE
+    deserialization:
+      accept-float-as-int: false
+      fail-on-unknown-properties: true
+  lifecycle:
+    timeout-per-shutdown-phase: 30s
+server:
+  port: ${PORT:8080}
+  shutdown: graceful
+  error:
+    include-message: never
+    include-stacktrace: never
+management:
+  metrics:
+    distribution:
+      percentiles-histogram:
+        http.server.requests: true
+      percentiles:
+        http.server.requests: 0.99
+  endpoints:
+    web:
+      exposure:
+        include: health,prometheus
+  endpoint:
+    health:
+      show-details: never
+      probes:
+        enabled: true
+      group:
+        readiness:
+          include: readinessState,db

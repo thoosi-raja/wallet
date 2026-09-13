@@ -1,0 +1,38 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: wallet
+      POSTGRES_USER: wallet
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-wallet-local-development}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U wallet -d wallet"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+  wallet-service:
+    build: .
+    environment:
+      DB_URL: jdbc:postgresql://postgres:5432/wallet
+      DB_USERNAME: wallet
+      DB_PASSWORD: ${DB_PASSWORD:-wallet-local-development}
+    ports:
+      - "127.0.0.1:${WALLET_PORT:-8080}:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 35s
+    restart: unless-stopped
+volumes:
+  postgres-data:
