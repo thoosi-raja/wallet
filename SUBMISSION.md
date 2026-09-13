@@ -4,7 +4,7 @@
 - Public repository: https://github.com/thoosi-raja/wallet
 - Reproduce locally: `docker compose up --build -d --wait && ./scripts/burst_test.sh`
 - Reproduce remotely: `BASE_URL=https://wallet-xrdr.onrender.com ./scripts/burst_test.sh --db postgres` with target database credentials supplied through PG environment variables. A credential-free SQL-editor workflow is documented in README.md.
-- Public logs endpoint: `/logs` serves a bounded snapshot of correlated domain events; deployed verification is pending. Generated reports and captured logs stay in the gitignored `evidence/` directory. GitHub CI uploads its results as workflow artifacts; see the [operations guide](docs/OPERATIONS.md).
+- Public logs: https://wallet-xrdr.onrender.com/logs — debit, credit, decline and replay events verified during the successful live burst on 2026-09-13. See the [verification report](docs/verification/2026-09-13-live-burst.md).
 
 ## Design and reasoning
 
@@ -18,16 +18,12 @@ Sorted row locks are simple for a two-wallet operation. A conditional debit can 
 
 The API supports both original paths and `/api/v1`, with one `success`, `data`, `error` envelope. Bearer tokens identify the source wallet owner. The image uses a multi-stage build, non-root runtime and health check. JSON completion events and domain counters are emitted after commit. Request histograms support aggregate p99 queries. A process crash can lose a post-commit log or metric; database rows remain the durable record.
 
-AI disclosure: the candidate supplied the exercise and requested response envelopes, versioned routes, the models package, Prometheus modernization and deployment. AI proposed and implemented the sorted-lock transaction design and unique-key race recovery, generated the code/tests/container setup, and helped diagnose live failures. Implementation was initially committed as one batch; subsequent review changes are recorded as new work. These notes do not claim unaided implementation or a fabricated incremental history.
+AI disclosure: I supplied the exercise requirements and directed the response envelopes, versioned routes, package layout, metrics changes and deployment. AI proposed the sorted-lock and idempotency-recovery design, which I accepted, and generated the implementation, tests and container configuration. I ran the live verification and used AI to investigate failures.
 
-Cost target: ₹0, using Render Free and Neon Free within their limits. Free-tier sleep, compute limits and verification requirements apply; no production availability guarantee is claimed.
+Cost target: ₹0 with Render Free and Neon Free. Cold starts and shared compute affect latency.
 
 ## Verification status
 
-- The expanded local Maven suite passed against PostgreSQL 18.6: 3 unit tests and 29 integration tests. Flyway 11.20.3 migrated and validated the schema without the PostgreSQL version warning.
-- The updated image passed all five local HTTP burst stages with a 512 MB memory limit and one CPU: 201 transfers, 151 successful and 50 declined; 4,000,000 paise conserved across four wallets. The public log feed checks passed. The report is retained under `evidence/local-memory-run/summary.json`; this CPU quota does not reproduce Render's shared CPU allocation.
-- Live readiness, metrics and the versioned API were checked on Render.
-- The first live 50-request provisioning probe failed: 5 HTTP 200 and 45 HTTP 503. All successful responses returned one wallet. Logs identified 36 connection-pool acquisition failures and 9 lock failures; no duplicate wallet was observed. The failed probe and supplied Render logs are retained locally.
-- A warm repeat passed all 50 requests with one wallet. The report is retained locally.
-- Commit `4622f0f` passed the fresh-clone Maven, Docker and HTTP burst checks and [GitHub CI](https://github.com/thoosi-raja/wallet/actions/runs/34757289013). It deployed after correcting a malformed Render environment variable.
-- Two live 200-request mixed bursts returned empty HTTP 502 responses while the Render process became unavailable. The second run completed its 30-request retry storm first, then returned 92 successes, 35 declines and 73 HTTP 502 responses in the mixed stage. The script generated reconciliation SQL for both runs. This is an unresolved free-instance availability failure, not a passing live load probe. The updated image further reduces heap and code-cache allocations before another live attempt.
+- Live PASS on 2026-09-13 at 15:51:51 UTC against Neon `wallet`: 50 concurrent provisioning requests, 30 identical transfers, conflicts/route aliases and 200 mixed transfers. SQL verified 201 rows (151 successful, 50 declined), exact per-wallet accounting and conservation of 4,000,000 paise. All 306 HTTP responses had expected statuses; mixed-stage client p99 was 54.45 seconds. See the [run report](docs/verification/2026-09-13-live-burst.md). The runner did not capture the deployed commit SHA.
+- Local Maven verification passed with 3 unit tests and 29 PostgreSQL integration tests from a fresh export of committed source. Local Docker and HTTP burst checks also passed; their CPU budget differs from Render's shared allocation.
+- Earlier live probes failed with HTTP 503 and 502 responses. The [verification history](docs/verification/2026-09-13-live-burst.md#earlier-verification) retains those results. The later pass does not establish the earlier restart cause.

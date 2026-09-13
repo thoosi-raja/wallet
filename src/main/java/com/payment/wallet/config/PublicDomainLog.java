@@ -15,7 +15,6 @@ import java.util.Set;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.stream.Collectors;
 
-/** Bounded public demo telemetry; PostgreSQL remains the durable transaction record. */
 @Component
 public class PublicDomainLog extends AppenderBase<ILoggingEvent> {
     private static final Set<String> EVENTS = Set.of("wallet_provisioned", "transfer_initiated", "transfer_created",

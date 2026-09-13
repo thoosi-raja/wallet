@@ -11,3 +11,8 @@ target
 evidence
 scripts
 SUBMISSION.md
+README.md
+HELP.md
+docs
+__pycache__
+.DS_Store

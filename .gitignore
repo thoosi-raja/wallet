@@ -33,6 +33,9 @@ build/
 .vscode/
 
 ### Local configuration ###
+.DS_Store
+.codex/
+.agents/
 .env
 .env.*
 !.env.example

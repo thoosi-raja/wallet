@@ -10,7 +10,6 @@ import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
 
-/** Limits in-flight money work so a small instance queues requests before exhausting database resources. */
 @Component
 public class TransferAdmission {
     private final int maximumInFlight;

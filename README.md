@@ -2,6 +2,8 @@
 
 Java 21, Spring Boot 3.5.16, PostgreSQL 16/18, Spring MVC, JPA, Flyway 11.20.3 and Micrometer. All balances and amounts are signed 64-bit integer paise. HTTP request handling uses virtual threads.
 
+[Submission](SUBMISSION.md) · [Live API](https://wallet-xrdr.onrender.com) · [Public logs](https://wallet-xrdr.onrender.com/logs) · [Metrics](https://wallet-xrdr.onrender.com/metrics) · [Live verification](docs/verification/2026-09-13-live-burst.md)
+
 ## Run
 
 ```bash
@@ -36,7 +38,6 @@ If you prefer Neon's SQL editor, no password needs to leave Neon:
 ```
 
 Manual mode verifies HTTP invariants and generates `verify.sql` for independent row-count checks. Its report explicitly marks database verification as pending. Once a run has started transfers, it cannot be resumed: use new wallets and keys for another attempt. Funding SQL updates only the run's four fresh zero-balance wallets, atomically. Use `--api-prefix ''` to test the original unversioned routes. Warmup allows up to 120 seconds for a sleeping free instance; bursts use a 120-second request deadline.
-
 
 For a local JVM, use Java 21 and an existing PostgreSQL 16 database:
 
@@ -113,15 +114,11 @@ Credit arithmetic uses `Math.addExact` before either balance is changed. Debits 
 
 `WalletService` uses `INSERT ... ON CONFLICT (user_id) DO NOTHING` followed by a separate read in the same `READ_COMMITTED` transaction. That read sees any competing upsert winner after it commits.
 
-DTOs and service results are immutable Java records. Table entities (`Wallet`, `Transfer`) and their status enum live in the `models` package. JPA entities use the classes and protected no-argument constructors required by JPA; wallet mutation is confined to locked transactions and transfers are marked immutable. The application contains no JVM monitor blocks or process-local balance locks. Multiple service instances coordinate through PostgreSQL. Service write methods own their transactions, so callers should invoke them without holding an outer database transaction or wallet locks.
+DTOs and service results are immutable Java records. Wallet mutations require row locks, and transfer entities are immutable. Multiple service instances coordinate through PostgreSQL. Service write methods own their transactions; invoke them without holding an outer database transaction or wallet locks.
 
-HikariCP allows 20 connections and waits at most 60 seconds for a connection. PostgreSQL lock timeout is 15 seconds, statement timeout is 20 seconds, transaction timeout is 30 seconds, and open-in-view is disabled. Contention exceeding these bounds produces a retryable failure rather than an unbounded wait. Conservation applies to the transfer engine; any separate funding or administration path must obey the same database locking and accounting rules.
+HikariCP allows six connections and waits at most 60 seconds for a connection. PostgreSQL lock timeout is 15 seconds, statement timeout is 20 seconds, transaction timeout is 30 seconds, and open-in-view is disabled. Contention exceeding these bounds produces a retryable failure rather than an unbounded wait. Conservation applies to the transfer engine; any separate funding or administration path must obey the same database locking and accounting rules.
 
-## Why Flyway rather than Liquibase?
-
-This service targets one database engine and currently has one small, PostgreSQL-specific SQL migration. Flyway's ordered SQL files and checksum history are sufficient and keep constraints and indexes easy to review. Hibernate only validates the result. Applied migrations must remain unchanged; future schema changes belong in new `V2__...sql`, `V3__...sql` files. Moving Java entities to `models` does not change table names or require a database migration. See [Flyway versioned migrations](https://documentation.red-gate.com/fd/versioned-migrations-273973333.html).
-
-Liquibase is also a valid choice, especially if the team needs structured changesets, explicit database [preconditions](https://www.liquibase.com/technical-glossary/preconditions), or a changeset [rollback workflow](https://docs.liquibase.com/community/reference-guide-5-0/init-update-and-rollback-commands/rollback). This project does not currently need those features, so Flyway remains in place. Neither tool supplies runtime transfer atomicity; PostgreSQL transactions, locks and constraints do that. A schema rollback also cannot undo already committed business transfers safely.
+Flyway manages the PostgreSQL schema through versioned SQL migrations; Hibernate validates it at startup. Keep applied migrations unchanged and add future schema changes as `V2__...sql`, `V3__...sql`, and so on.
 
 ## Observability
 
@@ -129,7 +126,7 @@ Standard output is JSON encoded by `LogstashEncoder`. Events include `wallet_pro
 
 The public `/logs` endpoint returns the latest 200 selected domain events in the shared JSON envelope. Its bounded buffer omits request bodies, tokens, idempotency keys, hashes and exception details, and resets on restart.
 
-On a small instance, at most eight transfer requests perform database work at once. Additional requests wait fairly for up to 120 seconds, then receive a retryable `503 TRANSFER_QUEUE_FULL` response. This caps database connections and pending lock work while preserving idempotent retry behavior. JSON stdout logging is asynchronous so slow log drains do not delay committed transfer responses.
+On a small instance, at most eight transfer requests enter the service at once. Additional requests wait fairly for up to 120 seconds, then receive a retryable `503 TRANSFER_QUEUE_FULL` response. This limits transfer work reaching the database while preserving idempotent retry behavior; the semaphore does not cap the number of waiting HTTP requests. Wallet provisioning and read endpoints do not use this gate. JSON stdout logging uses a 2,048-event asynchronous buffer; if it fills, logging callers block until space becomes available, which can delay transfer responses even after commit.
 
 `/metrics` and `/actuator/prometheus` export request rate, latency and error-rate inputs through `http_server_requests_seconds` with status/outcome tags and histogram buckets for p99 queries. They also export:
 
@@ -139,7 +136,7 @@ On a small instance, at most eight transfer requests perform database work at on
 
 Counters and completion logs are recorded after commit, so rollbacks do not count as completed transfers. They are process-level telemetry, reset on restart, and can miss a commit if the process stops before emitting the metric. PostgreSQL transfer rows are the durable accounting record. Health is exposed at `/actuator/health`, with liveness and database-aware readiness groups under `/actuator/health/liveness` and `/actuator/health/readiness`.
 
-The service uses the supported `micrometer-registry-prometheus` dependency and Spring Boot's auto-configured registry and `/actuator/prometheus` endpoint. `/metrics` scrapes that same registry. The successful-transfer counter was renamed from `wallet_transfers_created_total` to `wallet_transfers_successful_total`: the newer client reserves the `_created` suffix, so retaining the old name would silently change its exported series. Update any existing scrape queries or dashboards to the new name. See the [Micrometer migration guide](https://github.com/micrometer-metrics/micrometer/wiki/1.13-Migration-Guide) and [Boot endpoint documentation](https://docs.spring.io/spring-boot/3.5/reference/actuator/endpoints.html). The integration suite checks the actual scrape names and HTTP histogram output.
+`/metrics` and `/actuator/prometheus` scrape the same Micrometer registry. The integration suite checks the exported counter names and HTTP histogram output; [OPERATIONS.md](docs/OPERATIONS.md#metrics) contains PromQL queries.
 
 ## Verification
 
@@ -156,9 +153,3 @@ API: https://wallet-xrdr.onrender.com. Repository: https://github.com/thoosi-raj
 Use `/actuator/health/readiness` for the host health check and `/metrics` for Prometheus. The Docker health check follows `PORT` (8080 by default). Live readiness does not establish live concurrency correctness; current evidence and any remaining checks are recorded in [SUBMISSION.md](SUBMISSION.md).
 
 GitHub Actions checks a fresh checkout with Maven/PostgreSQL tests, Docker Compose, and the same burst command. CI stores its test reports, burst responses and container logs as artifacts. The [operations guide](docs/OPERATIONS.md) contains PromQL and the live log capture procedure.
-
-## Deployment boundary
-
-This implements the specified wallet engine with a deliberately simple bearer-token boundary for the exercise. Payment funding/settlement and a general ledger are outside this API. Public deployment still needs TLS, managed database credentials, restricted database privileges, backups and recovery. Compose binds the HTTP port to loopback and uses a local development database account; use deployment-specific credentials and network policy for a shared environment.
-
-Implementation references: [Spring Boot 3.5 requirements](https://docs.spring.io/spring-boot/3.5/system-requirements.html), [virtual threads](https://docs.spring.io/spring-boot/3.5/reference/features/spring-application.html#features.spring-application.virtual-threads), [PostgreSQL 16 row locking and consistent lock order](https://www.postgresql.org/docs/16/explicit-locking.html), and [PostgreSQL transaction isolation](https://www.postgresql.org/docs/16/transaction-iso.html).

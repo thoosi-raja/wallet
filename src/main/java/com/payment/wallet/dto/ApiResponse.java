@@ -2,10 +2,7 @@ package com.payment.wallet.dto;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
 
-/**
- * Shared business API envelope. Request correlation lives in X-Correlation-ID so that
- * replayed transfer bodies remain identical across requests.
- */
+/** Correlation stays in response headers to keep idempotent replay bodies identical. */
 @JsonInclude(JsonInclude.Include.ALWAYS)
 public record ApiResponse<T>(boolean success, T data, ApiError error) {
     public static <T> ApiResponse<T> success(T data) {
