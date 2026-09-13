@@ -66,6 +66,7 @@ class Runner:
             except (OSError, subprocess.TimeoutExpired) as error:
                 result = {'status': 0, 'body': '', 'headers': {}, 'transport_error': type(error).__name__}
         result.update(label=label, path=path, correlation_id=correlation,
+                      completed_at=datetime.datetime.now(datetime.timezone.utc).isoformat(),
                       latency_ms=round((time.monotonic() - start) * 1000, 2))
         with self.guard:
             self.responses.append(result)
@@ -170,6 +171,20 @@ SELECT count(*) AS funded_wallets FROM funded;
     def save(self):
         (self.directory / 'state.json').write_text(json.dumps(self.state, indent=2) + '\n')
 
+    def verification_sql(self):
+        self.validate_wallets()
+        ids = ', '.join("'" + w['id'] + "'" for w in self.state['wallets'])
+        return f"""SELECT count(*) AS transfer_rows, count(*) FILTER (WHERE status = 'SUCCESS') AS successful,
+ count(*) FILTER (WHERE status = 'DECLINED_INSUFFICIENT_FUNDS') AS declined
+ FROM transfers WHERE source_wallet_id IN ({ids});
+SELECT count(*) AS wallet_rows, sum(balance_paise) AS total_paise, min(balance_paise) AS minimum_paise
+ FROM wallets WHERE id IN ({ids});
+SELECT w.id, w.balance_paise,
+ {SEED} + COALESCE((SELECT sum(t.amount_paise) FROM transfers t WHERE t.destination_wallet_id = w.id AND t.status = 'SUCCESS'), 0)
+ - COALESCE((SELECT sum(t.amount_paise) FROM transfers t WHERE t.source_wallet_id = w.id AND t.status = 'SUCCESS'), 0) AS expected_balance
+ FROM wallets w WHERE w.id IN ({ids}) ORDER BY w.id;
+"""
+
     def exercise(self):
         self.validate_wallets()
         initial = self.balances()
@@ -232,13 +247,7 @@ SELECT count(*) AS funded_wallets FROM funded;
         fetched = self.request('GET', self.state['api_prefix'] + '/transfers/' + original['data']['id'], self.wallet(0)['user'])
         require(self.body(fetched, 200) == original, 'Persisted transfer read differs')
         print('5/5: database evidence and Prometheus counters', flush=True)
-        ids_sql = ', '.join("'" + w['id'] + "'" for w in self.state['wallets'])
-        checks = f"""SELECT count(*) AS transfer_rows, count(*) FILTER (WHERE status = 'SUCCESS') AS successful,
- count(*) FILTER (WHERE status = 'DECLINED_INSUFFICIENT_FUNDS') AS declined
- FROM transfers WHERE source_wallet_id IN ({ids_sql});
-SELECT count(*) AS wallet_rows, sum(balance_paise) AS total_paise, min(balance_paise) AS minimum_paise
- FROM wallets WHERE id IN ({ids_sql});
-"""
+        checks = self.verification_sql()
         (self.directory / 'verify.sql').write_text(checks)
         database_checked = self.args.db != 'manual'
         if database_checked:
@@ -253,6 +262,13 @@ SELECT count(*) AS wallet_rows, sum(balance_paise) AS total_paise, min(balance_p
                      'wallet_transfers_idempotent_replays_total'):
             require(name in metrics['body'], 'Metric absent: ' + name)
         (self.directory / 'metrics.txt').write_text(metrics['body'])
+        public_logs = self.request('GET', '/logs', label='public-logs')
+        events = self.body(public_logs, 200)['data']
+        require(any(event['event'] == 'transfer_declined_insufficient_funds' for event in events), 'Public decline event absent')
+        require(any(event['event'] == 'idempotent_replay_hit' for event in events), 'Public replay event absent')
+        require(any(event['correlation_id'].startswith(self.state['run_id']) for event in events
+                    if event.get('correlation_id')), 'Public logs missing this run correlation IDs')
+        (self.directory / 'public-logs.json').write_text(json.dumps(events, indent=2) + '\n')
         report = {'result': 'PASS', 'base_url': self.state['base_url'], 'run_id': self.state['run_id'],
                   'completed_at': datetime.datetime.now(datetime.timezone.utc).isoformat(),
                   'provisioning_concurrency': 50, 'idempotency_concurrency': 30, 'contention_concurrency': 200,
@@ -307,6 +323,8 @@ def main():
         runner.exercise()
     except Exception as error:
         (runner.directory / 'failure.json').write_text(json.dumps({'result': 'FAIL', 'reason': str(error)}, indent=2) + '\n')
+        if state.get('exercise_started'):
+            (runner.directory / 'verify.sql').write_text(runner.verification_sql())
         raise
 
 

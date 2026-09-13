@@ -66,7 +66,8 @@ import static org.mockito.Mockito.mockingDetails;
 @Timeout(60)
 class WalletConcurrencyIT {
     @Container
-    static final PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>("postgres:16-alpine");
+    static final PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>(
+            System.getProperty("test.postgres.image", "postgres:16-alpine"));
 
     @DynamicPropertySource
     static void database(DynamicPropertyRegistry registry) {
@@ -478,6 +479,23 @@ class WalletConcurrencyIT {
             appender.stop();
             jdbc.execute("ALTER TABLE transfers DROP CONSTRAINT test_log_failure");
         }
+    }
+
+    @Test
+    void publicLogsExposeCorrelatedDomainEventsWithoutCredentials() throws Exception {
+        String a = wallet(100);
+        String b = wallet(0);
+        String key = unique();
+        assertThat(transfer(a, b, 10, key).statusCode()).isEqualTo(201);
+        assertThat(transfer(a, b, 10, key).statusCode()).isEqualTo(200);
+        assertThat(transfer(a, b, 1000, unique()).statusCode()).isEqualTo(422);
+        var logs = send("GET", "/logs", null, null);
+        assertThat(logs.statusCode()).isEqualTo(200);
+        assertThat(logs.headers().firstValue("Cache-Control")).contains("no-store");
+        assertThat(logs.body()).contains("wallet_debited", "wallet_credited", "idempotent_replay_hit",
+                "transfer_declined_insufficient_funds", "integration-test");
+        assertThat(logs.body()).doesNotContain(key, "Authorization", "request_hash");
+        assertThat(body(logs).path("data").size()).isBetween(1, 200);
     }
 
     private void assertError(HttpResponse<String> response, int status, String code) {

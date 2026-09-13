@@ -38,6 +38,5 @@ build/
 !.env.example
 *.log
 __pycache__/
-evidence/runs/
-evidence/live-*/
-evidence/local-run/
+evidence/
+*.cast

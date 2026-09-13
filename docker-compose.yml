@@ -15,6 +15,8 @@ services:
     restart: unless-stopped
   wallet-service:
     build: .
+    mem_limit: 512m
+    cpus: 1
     environment:
       DB_URL: jdbc:postgresql://postgres:5432/wallet
       DB_USERNAME: wallet

@@ -4,7 +4,7 @@
 - Public repository: https://github.com/thoosi-raja/wallet
 - Reproduce locally: `docker compose up --build -d --wait && ./scripts/burst_test.sh`
 - Reproduce remotely: `BASE_URL=https://wallet-xrdr.onrender.com ./scripts/burst_test.sh --db postgres` with target database credentials supplied through PG environment variables. A credential-free SQL-editor workflow is documented in README.md.
-- Logs/evidence: see [evidence](evidence/) and the [operations guide](docs/OPERATIONS.md). A public recording of the complete deployed burst remains outstanding. The included live failure logs are actual supplied Render output, not a success demonstration.
+- Public logs endpoint: `/logs` serves a bounded snapshot of correlated domain events; deployed verification is pending. Generated reports and captured logs stay in the gitignored `evidence/` directory. GitHub CI uploads its results as workflow artifacts; see the [operations guide](docs/OPERATIONS.md).
 
 ## Design and reasoning
 
@@ -24,9 +24,10 @@ Cost target: ₹0, using Render Free and Neon Free within their limits. Free-tie
 
 ## Verification status
 
-- The expanded local Maven suite passed: 2 unit tests and 28 PostgreSQL integration tests.
-- The local HTTP burst passed all five stages with exact SQL counts: 201 transfers, 151 successful and 50 declined; 4,000,000 paise conserved across four wallets. See [local report](evidence/local-summary.json).
+- The expanded local Maven suite passed against PostgreSQL 18.6: 3 unit tests and 29 integration tests. Flyway 11.20.3 migrated and validated the schema without the PostgreSQL version warning.
+- The updated image passed all five local HTTP burst stages with a 512 MB memory limit and one CPU: 201 transfers, 151 successful and 50 declined; 4,000,000 paise conserved across four wallets. The public log feed checks passed. The report is retained under `evidence/local-memory-run/summary.json`; this CPU quota does not reproduce Render's shared CPU allocation.
 - Live readiness, metrics and the versioned API were checked on Render.
-- The first live 50-request provisioning probe failed: 5 HTTP 200 and 45 HTTP 503. All successful responses returned one wallet. Logs identified 36 connection-pool acquisition failures and 9 lock failures; no duplicate wallet was observed. See [failed probe](evidence/live-provisioning-failed.json) and [actual failure logs](evidence/live-failure-logs.jsonl).
-- A warm repeat passed all 50 requests with one wallet. See [warm probe](evidence/live-provisioning-warm.json).
-- Longer bounded connection/lock waits are being deployed in response to the measured failure. Cold-start revalidation, live funded transfer storms, independent Neon row counts and a full public log recording remain pending. A warm provisioning pass is not a full live correctness pass.
+- The first live 50-request provisioning probe failed: 5 HTTP 200 and 45 HTTP 503. All successful responses returned one wallet. Logs identified 36 connection-pool acquisition failures and 9 lock failures; no duplicate wallet was observed. The failed probe and supplied Render logs are retained locally.
+- A warm repeat passed all 50 requests with one wallet. The report is retained locally.
+- Commit `4622f0f` passed the fresh-clone Maven, Docker and HTTP burst checks and [GitHub CI](https://github.com/thoosi-raja/wallet/actions/runs/34757289013). It deployed after correcting a malformed Render environment variable.
+- On that deployment, the live 30-request retry storm passed. The 200-request mixed burst returned 81 successes, 25 declines and 94 empty HTTP 502 responses; metrics confirmed the process restarted during the run. User-supplied Neon SQL results showed 107 committed transfers (82 successes including the original retry-storm transfer, 25 declines), exactly 4,000,000 paise and exact per-wallet reconciliation. This establishes conservation for that interrupted run, not a passing full live load probe. The updated image reserves more memory for JVM overhead; the platform restart cause and full live revalidation remain outstanding.

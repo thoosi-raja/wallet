@@ -10,6 +10,12 @@ Without database credentials, use `--prepare`, execute the generated `seed.sql` 
 
 For strict evaluator tooling, point it at either `/wallets` and `/transfers` or `/api/v1/wallets` and `/api/v1/transfers`, and extract `.data.id`, `.data.balance_paise`, and `.data.status`.
 
+## Render environment naming
+
+The code defaults to a 60,000 ms connection-pool wait. An override is normally unnecessary. If needed, use `SPRING_DATASOURCE_HIKARI_CONNECTIONTIMEOUT=60000`, not `SPRING_DATASOURCE_HIKARI_CONNECTION_TIMEOUT`. The latter is interpreted as a nested `connection.timeout` property and was reproduced starting Hikari before binding finished, producing a "pool is sealed" startup failure. Delete the malformed variable rather than keeping both spellings.
+
+Other valid overrides are `SPRING_DATASOURCE_HIKARI_MAXIMUMPOOLSIZE` and `SPRING_DATASOURCE_HIKARI_MINIMUMIDLE`. Spring Boot's environment conversion replaces dots with underscores and removes hyphens; see the [official binding rules](https://docs.spring.io/spring-boot/reference/features/external-config.html#features.external-config.typesafe-configuration-properties.relaxed-binding.environment-variables).
+
 ## Metrics
 
 Scrape `https://wallet-xrdr.onrender.com/metrics` at a regular interval. Example queries (the URI regular expression covers both API route forms):
@@ -33,6 +39,18 @@ increase(wallet_transfers_idempotent_replays_total[5m])
 
 Counters reset on app restart and are telemetry, not an accounting ledger. The burst runner's p99 is measured end to end at the client and differs from server processing latency.
 
+## Public domain logs
+
+`https://wallet-xrdr.onrender.com/logs` exposes the most recent 200 selected domain events as `data` in the shared response envelope. It is a public, non-cached snapshot for this demonstration, not a durable audit store. Only event time, name, correlation ID, transfer/wallet ID, integer amount and outcome are included. Request bodies, tokens, idempotency keys, request hashes, exception details and arbitrary log messages are omitted. The bounded buffer resets on restart and may omit older events during a burst. Full structured stdout logging remains available in Render.
+
+To follow the feed in a terminal:
+
+```bash
+while true; do curl -fsS https://wallet-xrdr.onrender.com/logs; printf '\n'; sleep 2; done
+```
+
+The burst runner captures this feed and verifies correlated decline and replay events. Publish its URL as the public logs link after checking the deployed endpoint. Generated captures remain gitignored; a longer demonstration recording is optional.
+
 ## Log evidence
 
 1. Open the deployed Render service's Logs view and start a screen recording that shows the service identity and timestamps.
@@ -40,7 +58,7 @@ Counters reset on app restart and are telemetry, not an accounting ledger. The b
 3. Show `transfer_created`, `wallet_debited`, `wallet_credited`, `transfer_declined_insufficient_funds`, and `idempotent_replay_hit`. Match a declined response's `correlation_id` in `responses.jsonl` to its server log event.
 4. Show the final test result and database verification. Publish the recording at a reviewer-accessible URL and put that link in `SUBMISSION.md`.
 
-The Render dashboard itself is account-restricted. Do not present its private URL as a public logs link. A captured local Compose run proves only local behavior; label it accordingly. Never include credentials or the Environment settings screen in a recording.
+The Render dashboard itself is account-restricted. Use the public `/logs` feed or a shared recording for reviewers; do not present a private dashboard URL as a public logs link. A captured local Compose run proves only local behavior; label it accordingly. Never include credentials or the Environment settings screen in a recording.
 
 For local JSON log export:
 
@@ -57,3 +75,9 @@ Both directions acquire the same two wallet locks in lexical ID order. `READ_COM
 A conditional debit is also viable, but the destination credit still locks a second row, so opposing transfers still need a consistent lock order or deliberate deadlock recovery. Serializable isolation adds serialization failures and retry handling that this two-row transfer does not require. JVM locks do not coordinate multiple app instances. Bounded database failures return 503 so callers can retry the same key without accepting unsafe writes.
 
 The reversal feature is not part of the current R2 API. A later implementation needs an original-transfer link, at most one successful reversal per original enforced in the database, its own idempotency key, and an atomic debit of the original recipient. An insufficient recipient balance must decline without changing either wallet.
+
+## Free-instance resource budget
+
+The Docker JVM uses at most 50% of container memory for the Java heap and caps its code cache at 64 MB, leaving room for class metadata, thread stacks and native allocations. Compose limits the app to 512 MB and one CPU for repeatable local tests. This does not promise the same CPU throughput as shared free hosting. The health-check startup grace is five minutes to allow slow initialization; once healthy, checks run every 15 seconds.
+
+A separate local test with a hard 0.1-CPU quota showed clean 503 responses under severe contention, without a process restart. A Render burst did restart the process, so the underlying platform restart reason must not be assumed solely from that local test. Limits protect accounting correctness; only live measurements establish whether a particular free-instance burst completes successfully.

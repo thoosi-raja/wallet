@@ -14,9 +14,17 @@ jobs:
           java-version: '21'
           cache: maven
       - name: Unit and PostgreSQL concurrency tests
+        env:
+          SPRING_DATASOURCE_HIKARI_CONNECTIONTIMEOUT: '60000'
         run: ./mvnw -B -ntp clean verify -Dmaven.test.redirectTestOutputToFile=true
+      - name: Preserve PostgreSQL 16 reports
+        run: |
+          mkdir -p evidence/postgres16
+          cp -R target/surefire-reports target/failsafe-reports evidence/postgres16/
       - name: Build and start containers
         run: docker compose up --build -d --wait
+      - name: PostgreSQL 18 compatibility
+        run: ./mvnw -B -ntp verify -Dtest.postgres.image=postgres:18.6-alpine -Dmaven.test.redirectTestOutputToFile=true
       - name: HTTP burst and database verification
         run: ./scripts/burst_test.sh
       - name: Collect container logs
@@ -30,6 +38,7 @@ jobs:
             target/surefire-reports/
             target/failsafe-reports/
             evidence/runs/
+            evidence/postgres16/
             compose.log
       - name: Stop test containers
         if: always()

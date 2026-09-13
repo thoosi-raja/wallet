@@ -1,6 +1,6 @@
 # Wallet service
 
-Java 21, Spring Boot 3.5.16, PostgreSQL 16, Spring MVC, JPA, Flyway and Micrometer. All balances and amounts are signed 64-bit integer paise. HTTP request handling uses virtual threads.
+Java 21, Spring Boot 3.5.16, PostgreSQL 16/18, Spring MVC, JPA, Flyway 11.20.3 and Micrometer. All balances and amounts are signed 64-bit integer paise. HTTP request handling uses virtual threads.
 
 ## Run
 
@@ -47,7 +47,7 @@ export DB_PASSWORD=your-local-database-password
 ./mvnw spring-boot:run
 ```
 
-Flyway creates the schema on first start; Hibernate validates it without modifying it. The Docker build compiles and runs unit tests on Java 21. The runtime uses the unprivileged `walletuser:walletgroup`, a read-only filesystem with writable `/tmp`, and an HTTP health check.
+Flyway creates the schema on first start; Hibernate validates it without modifying it. The Docker build compiles and runs unit tests on Java 21. The runtime uses the unprivileged `walletuser:walletgroup`, a read-only filesystem with writable `/tmp`, and an HTTP health check. Compose caps the app at 512 MB and one CPU; the JVM reserves at most half of container memory for its heap and 64 MB for code cache.
 
 ## API
 
@@ -127,6 +127,8 @@ Liquibase is also a valid choice, especially if the team needs structured change
 
 Standard output is JSON encoded by `LogstashEncoder`. Events include `wallet_provisioned`, `transfer_initiated`, `transfer_created`, `wallet_debited`, `wallet_credited`, `transfer_success`, `transfer_declined_insufficient_funds`, and `idempotent_replay_hit`. Every creation/debit/credit/completion event is emitted only after commit, with the transfer ID and request correlation ID. Replays emit no new debit or credit event. Request bodies and idempotency keys are not included in domain event logs. `X-Correlation-ID` is returned and put in MDC; missing or unsafe values are replaced with a UUID, and MDC is cleared in a `finally` block. Accepted supplied IDs contain 1–128 letters, digits, dots, underscores, colons or hyphens.
 
+The public `/logs` endpoint returns the latest 200 selected domain events in the shared JSON envelope. Its bounded buffer omits request bodies, tokens, idempotency keys, hashes and exception details, and resets on restart.
+
 `/metrics` and `/actuator/prometheus` export request rate, latency and error-rate inputs through `http_server_requests_seconds` with status/outcome tags and histogram buckets for p99 queries. They also export:
 
 - `wallet_transfers_successful_total`
@@ -144,7 +146,7 @@ The service uses the supported `micrometer-registry-prometheus` dependency and S
 ./mvnw verify     # Unit and PostgreSQL 16 Testcontainers integration tests; Docker is required
 ```
 
-Integration tests send concurrent HTTP requests through the actual MVC server. They verify provisioning races, identical replays after exhausting the source, conflicting payloads, 50 simultaneous debits, 200 bidirectional transfers, durable declined replays, forced unique-index races and rollback recovery, integer overflow and maximum-long precision, malformed input, the direct database overdraft constraint, unrelated integrity failures, correlation headers, virtual request threads, metrics, health, and read endpoints. They require real PostgreSQL and fail if Docker is unavailable; no H2 approximation or silent test skipping is used.
+Integration tests send concurrent HTTP requests through the actual MVC server. They verify provisioning races, identical replays after exhausting the source, conflicting payloads, 50 simultaneous debits, 200 bidirectional transfers, durable declined replays, forced unique-index races and rollback recovery, integer overflow and maximum-long precision, malformed input, the direct database overdraft constraint, unrelated integrity failures, correlation headers, virtual request threads, metrics, health, and read endpoints. Use `./mvnw verify -Dtest.postgres.image=postgres:18.6-alpine` to run against the deployed Neon database version. Flyway is pinned to 11.20.3 for PostgreSQL 18 support. Tests require real PostgreSQL and fail if Docker is unavailable; no H2 approximation or silent test skipping is used.
 
 ## Deployment and evidence
 

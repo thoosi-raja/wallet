@@ -8,6 +8,7 @@ public final class ApiRoutes {
     public static final String TRANSFERS = V1 + TRANSFER_ALIAS;
     public static final String BY_ID = "/{id}";
     public static final String METRICS = "/metrics";
+    public static final String LOGS = "/logs";
 
     private ApiRoutes() {
     }
